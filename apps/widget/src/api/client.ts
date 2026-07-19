@@ -4,6 +4,7 @@ import type {
   ChatTurnResult,
   ManagerTask,
   Message,
+  PriceCalculation,
 } from "@ai-door-assistant/shared";
 
 export interface ConversationDto {
@@ -67,4 +68,18 @@ export function createManagerTask(
 
 export function createSummary(id: string) {
   return request(`/conversations/${id}/summary`, { method: "POST" });
+}
+
+export interface CalculatePriceRequest {
+  sku: string;
+  customSize?: { widthMm: number; heightMm: number };
+  services?: string[];
+  components?: Array<{ sku: string; quantity: number; role?: string }>;
+}
+
+export function calculatePrice(id: string, body: CalculatePriceRequest) {
+  return request<PriceCalculation>(`/conversations/${id}/price`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

@@ -26,6 +26,10 @@ packages/shared       TypeScript types shared by both (Agent contracts,
    - `SearchAgent` looks the query up in the rf-dveri.ru catalog.
    - If the message has price intent, `PriceAgent` computes a `PriceCalculation`
      — and lists exactly which inputs were missing instead of guessing them.
+     Kits (door leaf + frame + casing, etc.) are priced via `POST
+     /api/conversations/:id/price` with explicit `{ sku, quantity, role }[]`
+     components — the agent looks each SKU up in the real catalog and refuses
+     to pick a frame/casing on the customer's behalf when none is given.
    - `HumanSalesAgent` (LLM-backed) drafts the customer-facing reply, grounded
      only in the facts the steps above actually found.
    - `CrmAgent` files an AmoCRM note with the AI's reply, if a deal is linked.
@@ -98,6 +102,16 @@ Windows-1251-encoded XML feed with ~7000 offers, no auth required. Notes:
   are ranked by token-match count. Good enough for conversational queries at
   ~7000 offers; swap for a real search index if the catalog grows much larger
   or ranking quality needs to improve.
+- Frame ("коробка") and casing ("наличник") are separate catalog SKUs, not
+  linked to a specific door model/color in the feed — `PriceAgent` can price
+  a kit (door + N×frame + M×casing) once given explicit SKUs+quantities
+  (`POST /api/conversations/:id/price`), but it will never pick one on its
+  own, since there's no reliable feed data to match a frame/casing to a door.
+- The XML parser (`fast-xml-parser`) is configured with `parseTagValue:
+  false` deliberately — its default number-coercion silently turned some
+  numeric-looking `vendorCode` values into JS numbers, which crashed
+  `sku.toLowerCase()` calls at runtime. Only `price`/`categoryId` are
+  explicitly `Number()`-converted; everything else stays a string.
 
 ## Known scaffold limitations (by design, see the task's scope discussion)
 

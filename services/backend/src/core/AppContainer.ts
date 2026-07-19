@@ -66,7 +66,7 @@ export class AppContainer {
     this.crmAgent = new CrmAgent(this.amoCrm);
     this.productAgent = new ProductAgent(this.catalog);
     this.searchAgent = new SearchAgent(this.catalog);
-    this.priceAgent = new PriceAgent(this.servicePrices);
+    this.priceAgent = new PriceAgent(this.catalog, this.servicePrices);
     this.materialExpertAgent = new MaterialExpertAgent(this.llm);
     this.humanSalesAgent = new HumanSalesAgent(this.llm);
     this.visionAgent = new VisionAgent(this.llm);

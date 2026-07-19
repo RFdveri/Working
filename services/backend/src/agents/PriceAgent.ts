@@ -5,24 +5,40 @@ import type {
   PriceCalculation,
   Product,
 } from "@ai-door-assistant/shared";
+import type { CatalogClient } from "../integrations/catalog/CatalogClient.js";
 import type { ServicePriceProvider } from "../integrations/pricing/ServicePriceProvider.js";
 import { log } from "./support.js";
+
+export interface PriceKitComponent {
+  /** Catalog SKU of the component (e.g. a specific "коробка"/"наличник" offer). */
+  sku: string;
+  quantity: number;
+  /** Human label for the line item, e.g. "Коробка" — defaults to the catalog product's name. */
+  role?: string;
+}
 
 export interface PriceAgentInput {
   product: Product;
   customSize?: { widthMm: number; heightMm: number };
   services?: string[];
+  /** Kit components (frame, casing, ...) priced from the catalog by SKU × quantity. */
+  components?: PriceKitComponent[];
 }
 
 /**
- * Computes door + components + custom-size + services pricing. Asks a
+ * Computes door + kit components + custom-size + services pricing. Asks a
  * clarifying question instead of guessing whenever an input it needs
- * (catalog price, surcharge rule, service price) is missing.
+ * (catalog price, a component SKU, surcharge rule, service price) is missing —
+ * this includes refusing to pick a frame/casing SKU on the customer's behalf
+ * when the request doesn't specify one.
  */
 export class PriceAgent implements Agent<PriceAgentInput, PriceCalculation> {
   readonly name = "price" as const;
 
-  constructor(private readonly servicePrices: ServicePriceProvider) {}
+  constructor(
+    private readonly catalog: CatalogClient,
+    private readonly servicePrices: ServicePriceProvider
+  ) {}
 
   async handle(
     _context: AgentContext,
@@ -38,6 +54,19 @@ export class PriceAgent implements Agent<PriceAgentInput, PriceCalculation> {
     }
 
     const components: PriceCalculation["components"] = [];
+    for (const component of input.components ?? []) {
+      const componentProduct = await this.catalog.getBySku(component.sku);
+      if (!componentProduct || componentProduct.price === undefined) {
+        missingInputs.push(
+          `Не найдена цена компонента "${component.role ?? component.sku}" (артикул ${component.sku}) — уточните у менеджера.`
+        );
+        continue;
+      }
+      components.push({
+        label: `${component.role ?? componentProduct.name} × ${component.quantity}`,
+        amount: componentProduct.price * component.quantity,
+      });
+    }
 
     let customSizeSurcharge: PriceCalculation["customSizeSurcharge"];
     if (input.customSize) {

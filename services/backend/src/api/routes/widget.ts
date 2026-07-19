@@ -3,6 +3,19 @@ import { Router } from "express";
 import { z } from "zod";
 import { createEmptyMemory, type AgentContext, type AssistantMode, type Message } from "@ai-door-assistant/shared";
 import type { AppContainer } from "../../core/AppContainer.js";
+import type { Conversation } from "../../core/conversation/ConversationManager.js";
+
+async function buildContext(app: AppContainer, conversation: Conversation): Promise<AgentContext> {
+  return {
+    conversationId: conversation.id,
+    dealId: conversation.dealId,
+    contactId: conversation.contactId,
+    mode: conversation.mode,
+    managerActive: conversation.managerActive,
+    memory: conversation.contactId ? await app.memory.get(conversation.contactId) : createEmptyMemory(),
+    history: conversation.messages,
+  };
+}
 
 const createConversationSchema = z.object({
   dealId: z.string().optional(),
@@ -39,6 +52,21 @@ const createTaskSchema = z.object({
   ]),
   text: z.string(),
   dueAt: z.string().optional(),
+});
+
+const calculatePriceSchema = z.object({
+  sku: z.string(),
+  customSize: z.object({ widthMm: z.number(), heightMm: z.number() }).optional(),
+  services: z.array(z.string()).optional(),
+  components: z
+    .array(
+      z.object({
+        sku: z.string(),
+        quantity: z.number().positive(),
+        role: z.string().optional(),
+      })
+    )
+    .optional(),
 });
 
 export function createWidgetRouter(app: AppContainer): Router {
@@ -86,20 +114,7 @@ export function createWidgetRouter(app: AppContainer): Router {
         return;
       }
 
-      const memory = conversation.contactId
-        ? await app.memory.get(conversation.contactId)
-        : createEmptyMemory();
-
-      const context: AgentContext = {
-        conversationId,
-        dealId: conversation.dealId,
-        contactId: conversation.contactId,
-        mode: conversation.mode,
-        managerActive: conversation.managerActive,
-        memory,
-        history: conversation.messages,
-      };
-
+      const context = await buildContext(app, conversation);
       const result = await app.directorAgent.handle(context, { message });
       conversation = app.conversations.appendLogs(conversationId, result.logs);
 
@@ -122,17 +137,7 @@ export function createWidgetRouter(app: AppContainer): Router {
     try {
       const body = createTaskSchema.parse(req.body);
       const conversation = app.conversations.requireConversation(req.params.id);
-      const context: AgentContext = {
-        conversationId: conversation.id,
-        dealId: conversation.dealId,
-        contactId: conversation.contactId,
-        mode: conversation.mode,
-        managerActive: conversation.managerActive,
-        memory: conversation.contactId
-          ? await app.memory.get(conversation.contactId)
-          : createEmptyMemory(),
-        history: conversation.messages,
-      };
+      const context = await buildContext(app, conversation);
       const result = await app.taskAgent.handle(context, body);
       app.conversations.appendLogs(conversation.id, result.logs);
       res.status(201).json(result.payload);
@@ -144,19 +149,35 @@ export function createWidgetRouter(app: AppContainer): Router {
   router.post("/conversations/:id/summary", async (req, res, next) => {
     try {
       const conversation = app.conversations.requireConversation(req.params.id);
-      const context: AgentContext = {
-        conversationId: conversation.id,
-        dealId: conversation.dealId,
-        contactId: conversation.contactId,
-        mode: conversation.mode,
-        managerActive: conversation.managerActive,
-        memory: conversation.contactId
-          ? await app.memory.get(conversation.contactId)
-          : createEmptyMemory(),
-        history: conversation.messages,
-      };
+      const context = await buildContext(app, conversation);
       const result = await app.summaryAgent.handle(context, {});
       app.conversations.appendLogs(conversation.id, result.logs);
+      res.status(201).json(result.payload);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/conversations/:id/price", async (req, res, next) => {
+    try {
+      const body = calculatePriceSchema.parse(req.body);
+      const conversation = app.conversations.requireConversation(req.params.id);
+      const context = await buildContext(app, conversation);
+
+      const product = await app.productAgent.handle(context, { sku: body.sku });
+      if (!product.payload) {
+        app.conversations.appendLogs(conversation.id, product.logs);
+        res.status(404).json({ error: "product not found", clarifyingQuestions: product.clarifyingQuestions });
+        return;
+      }
+
+      const result = await app.priceAgent.handle(context, {
+        product: product.payload,
+        customSize: body.customSize,
+        services: body.services,
+        components: body.components,
+      });
+      app.conversations.appendLogs(conversation.id, [...product.logs, ...result.logs]);
       res.status(201).json(result.payload);
     } catch (error) {
       next(error);

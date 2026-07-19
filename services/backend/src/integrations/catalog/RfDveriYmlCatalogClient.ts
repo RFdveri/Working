@@ -7,14 +7,19 @@ import type {
 } from "@ai-door-assistant/shared";
 import type { CatalogClient } from "./CatalogClient.js";
 
+// All tag values are parsed as strings (parseTagValue: false below) — fast-xml-parser's
+// default number-coercion silently turns numeric-looking text (e.g. some vendorCode
+// values) into JS numbers, which broke `.toLowerCase()` calls on `sku` at runtime.
+// Every field below is deliberately typed as a raw string and converted explicitly
+// where a number is actually needed (price, categoryId, ids).
 interface RawOffer {
   "@_id": string;
   "@_available"?: string;
   url?: string;
-  price?: number;
-  oldprice?: number;
+  price?: string;
+  oldprice?: string;
   currencyId?: string;
-  categoryId?: number;
+  categoryId?: string;
   picture?: string[];
   name?: string;
   description?: string;
@@ -230,6 +235,7 @@ export class RfDveriYmlCatalogClient implements CatalogClient {
       ignoreAttributes: false,
       attributeNamePrefix: "@_",
       trimValues: true,
+      parseTagValue: false,
       isArray: (tagName) => tagName === "category" || tagName === "offer" || tagName === "picture",
     });
     const parsed = parser.parse(xml) as {
@@ -257,17 +263,19 @@ export class RfDveriYmlCatalogClient implements CatalogClient {
     categoryMap: Map<number, { name: string; parentId?: number }>
   ): CacheEntry {
     const descriptionText = (offer.description ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    const characteristics = extractCharacteristics(descriptionText, offer.categoryId, categoryMap);
+    const categoryId = offer.categoryId !== undefined ? Number(offer.categoryId) : undefined;
+    const characteristics = extractCharacteristics(descriptionText, categoryId, categoryMap);
     if (offer.vendor) characteristics.vendorGroup = offer.vendor;
 
     const images = offer.picture ?? [];
+    const price = offer.price !== undefined ? Number(offer.price) : undefined;
 
     const product: Product = {
       id: offer["@_id"],
       sku: offer.vendorCode ?? offer["@_id"],
       name: offer.name ?? "",
       characteristics,
-      price: typeof offer.price === "number" ? offer.price : undefined,
+      price: price !== undefined && !Number.isNaN(price) ? price : undefined,
       currency: offer.currencyId === "RUR" ? "RUB" : offer.currencyId,
       availability: offer["@_available"] === "false" ? "unavailable" : "in-stock",
       url: offer.url ?? "",
@@ -288,7 +296,7 @@ export class RfDveriYmlCatalogClient implements CatalogClient {
       .join(" ")
       .toLowerCase();
 
-    return { product, categoryId: offer.categoryId, searchText };
+    return { product, categoryId, searchText };
   }
 }
 
