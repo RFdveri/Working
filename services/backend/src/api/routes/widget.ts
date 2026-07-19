@@ -15,6 +15,7 @@ async function buildContext(app: AppContainer, conversation: Conversation): Prom
     memory: conversation.contactId ? await app.memory.get(conversation.contactId) : createEmptyMemory(),
     history: conversation.messages,
     focusProduct: conversation.focusProduct,
+    orderSpec: conversation.orderSpec,
   };
 }
 
@@ -130,6 +131,9 @@ export function createWidgetRouter(app: AppContainer): Router {
 
       if (result.payload?.focusProduct) {
         conversation = app.conversations.setFocusProduct(conversationId, result.payload.focusProduct);
+      }
+      if (result.payload?.orderSpec) {
+        conversation = app.conversations.setOrderSpec(conversationId, result.payload.orderSpec);
       }
 
       if (result.reply) {

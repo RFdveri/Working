@@ -59,6 +59,7 @@ export function createAmoCrmRouter(app: AppContainer): Router {
         memory: conversation.contactId ? await app.memory.get(conversation.contactId) : createEmptyMemory(),
         history: conversation.messages,
         focusProduct: conversation.focusProduct,
+        orderSpec: conversation.orderSpec,
       };
 
       const result = await app.directorAgent.handle(context, { message });
@@ -66,6 +67,9 @@ export function createAmoCrmRouter(app: AppContainer): Router {
 
       if (result.payload?.focusProduct) {
         app.conversations.setFocusProduct(conversation.id, result.payload.focusProduct);
+      }
+      if (result.payload?.orderSpec) {
+        app.conversations.setOrderSpec(conversation.id, result.payload.orderSpec);
       }
 
       if (result.reply && app.amoCrm) {

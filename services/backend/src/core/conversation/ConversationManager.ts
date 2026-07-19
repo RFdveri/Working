@@ -4,6 +4,7 @@ import type {
   AssistantMode,
   FocusProductRef,
   Message,
+  OrderSpec,
 } from "@ai-door-assistant/shared";
 
 export interface Conversation {
@@ -15,6 +16,7 @@ export interface Conversation {
   messages: Message[];
   logs: AgentLogEntry[];
   focusProduct?: FocusProductRef;
+  orderSpec?: OrderSpec;
 }
 
 /**
@@ -90,6 +92,12 @@ export class ConversationManager {
   setFocusProduct(conversationId: string, focusProduct: FocusProductRef): Conversation {
     const conversation = this.requireConversation(conversationId);
     conversation.focusProduct = focusProduct;
+    return conversation;
+  }
+
+  setOrderSpec(conversationId: string, orderSpec: OrderSpec): Conversation {
+    const conversation = this.requireConversation(conversationId);
+    conversation.orderSpec = orderSpec;
     return conversation;
   }
 }

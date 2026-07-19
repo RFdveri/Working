@@ -1,5 +1,6 @@
 import type { Message } from "./conversation.js";
 import type { CustomerMemory } from "./memory.js";
+import type { OrderSpec } from "./order.js";
 
 /** The 12 agents described in the project specification. */
 export type AgentName =
@@ -55,6 +56,8 @@ export interface AgentContext {
    * otherwise search-match something unrelated.
    */
   focusProduct?: FocusProductRef;
+  /** Persisted quantities/sizes/wall thickness for a bulk order, tracked across turns the same way as focusProduct. */
+  orderSpec?: OrderSpec;
 }
 
 export interface AgentResult<TPayload = unknown> {

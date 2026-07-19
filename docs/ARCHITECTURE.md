@@ -28,18 +28,20 @@ packages/shared       TypeScript types shared by both (Agent contracts,
      re-resolved by SKU via `ProductAgent`; if there's no anchor yet, the
      fresh search's top result becomes it.
    - If the message has price intent or mentions a kit ("комплект"/"под
-     ключ"/"коробк"/"наличник"/"добор"), `PriceAgent` computes a
-     `PriceCalculation` for the anchored product — kits use `{ kit: {
-     frameQuantity, casingQuantity, doorQuantity?, wallThicknessMm?,
-     jambExtensionQuantity? } }` to auto-resolve the frame/casing (and,
-     when the wall is thicker than the frame, the добор/jamb-extension board)
-     from the door's own product-page configurator (see "The catalog feed"
-     below). `doorQuantity` multiplies every per-door quantity so a bulk order
-     (e.g. 5 doors) is one code-computed total, not the LLM doing the
-     multiplication itself. Any ambiguous or missing match becomes a
-     clarifying question, never a guess. (The same `POST
-     /api/conversations/:id/price` endpoint also accepts explicit `{ sku,
-     quantity, role }[]` components directly, outside the conversational flow.)
+     ключ"/"коробк"/"наличник"/"добор") — or the conversation's persisted
+     `orderSpec` (see below) already exists — `PriceAgent` computes a
+     `PriceCalculation` for the anchored product, but only once quantity,
+     each door group's leaf-vs-opening size, and wall thickness are all
+     known; anything missing becomes a clarifying question instead of a
+     default/guess. Once known, `{ kit: { frameQuantity, casingQuantity,
+     doorQuantity, wallThicknessMm } }` auto-resolves the frame/casing (and
+     добор, when the wall is thicker than the frame) from the door's own
+     product-page configurator (see "The catalog feed" below) and multiplies
+     every per-door quantity by `doorQuantity` so a bulk order is one
+     code-computed total, not the LLM doing the multiplication itself. (The
+     same `POST /api/conversations/:id/price` endpoint also accepts explicit
+     `{ sku, quantity, role }[]` components directly, outside the
+     conversational flow.)
    - `HumanSalesAgent` (LLM-backed) drafts the customer-facing reply, grounded
      only in the facts the steps above actually found.
    - `CrmAgent` files an AmoCRM note with the AI's reply, if a deal is linked.
@@ -98,6 +100,54 @@ testing:
   on the door. Fixed by excluding anything under the "Комплектующие" category
   path from `foundProducts` before it's ever considered as a focus candidate
   — those are only ever kit *components* of a door, never the door itself.
+
+## Conversation continuity: the order spec
+
+The business owner asked, explicitly: the agent must ask for quantity, each
+door's size (leaf *or* opening — and say which), and wall thickness, rather
+than silently assuming any of them. `OrderSpec` (`doorGroups: {quantity,
+widthMm, widthKind, heightMm?, heightKind?}[]`, `wallThicknessMm`) is tracked
+per-conversation exactly like `focusProduct` — parsed and merged every turn
+(`ConversationManager.setOrderSpec`), not re-derived from scratch each time.
+
+- `parseDoorGroups()` reads lines like "3 двери 70, 2 двери 80" — a bare
+  number after "двер..." is assumed to be centimeters when ≤200, millimeters
+  otherwise, and is tagged `leaf`/`opening`/`unspecified` depending on whether
+  a "полотно"/"проём" word appears nearby. A group whose kind is
+  `unspecified` blocks the kit calculation with a clarifying question — the
+  agent will not assume which one the customer meant, since the difference
+  is exactly the ~80-100mm margin the standard-size table documents.
+- `parseRoomBasedDoorGroups()` handles "3 штуки в жилые комнаты и 2 на
+  кухню" — matching room-keyword stems (кладов/санузел·ванн/кухн/жил/гостин)
+  against `standard-door-sizes.json`'s leaf sizes — but **only** when the
+  customer's text also contains a hand-off phrase ("по стандарту",
+  "ориентируйтесь", "стандартный размер"). Without that phrase, a bare room
+  mention is something to ask about, not permission to assume a size.
+- The kit calculation only runs once `doorGroups` is non-empty, every
+  group's size kind is resolved, and `wallThicknessMm` is known; whichever of
+  those is still missing becomes the specific clarifying question (not a
+  generic "I need more data"). `clarifyingQuestions` is folded into
+  `groundedContext` before calling `HumanSalesAgent` — it previously only
+  went out on the wire, so the sales reply never actually asked the specific
+  thing Director determined was missing, only whatever the model improvised.
+- Once `wantsKit` is triggered by keywords once, it stays triggered for the
+  rest of the conversation as long as `orderSpec.doorGroups` is non-empty —
+  otherwise a later turn that just answers "толщина стены 14см" (no
+  "комплект" in it) would skip the kit branch entirely and the calculation
+  would never actually run once all the missing pieces arrived.
+- Caught by testing: the door-group size regex initially matched "5 дверей:
+  **3** штуки в жилые комнаты" as if "3" were a size (→ nonsense 30mm door),
+  because a sub-count between two colons/words happened to sit within the
+  lazy `\D{0,15}?` gap the regex used to bridge "двери" and a number. Fixed
+  with a plausibility filter (300–1500mm) that rejects any parsed width
+  outside real door dimensions rather than accepting whatever number was
+  nearest.
+
+Verified end to end: "5 дверей: 3 в жилые комнаты, 2 на кухню, ориентируйтесь
+по стандарту" correctly resolved to 3×800mm + 2×700mm (leaf, from the
+reference table); "толщина стены 14см" three turns later (no kit keywords in
+it) still triggered the calculation and produced the same 143,480 ₽ total
+verified earlier via the direct `/price` endpoint.
 
 ## Bulk kits with jamb extensions (добор) and multiple doors
 
@@ -166,6 +216,7 @@ over Russian text anywhere in this codebase, check for `\w`/`\b` first.
 | Per-door kit options (frame/casing) | `ProductConfiguratorClient` | — | `RfDveriProductConfiguratorClient` — **real**, scrapes a door's own product page for its frame/casing/добор/плинтус configurator options (not in the feed at all). |
 | AmoCRM | — | `null` when unconfigured (agents degrade to "not configured" + a clarifying question) | `AmoCrmClient` (OAuth + REST) |
 | Service/custom-size pricing | `ServicePriceProvider` | `JsonServicePriceProvider` reading `config/service-prices.json` (starts empty) | Same interface, swap the JSON for a real price-list source |
+| Standard door leaf/opening sizes | — | `config/standard-door-sizes.json`, loaded by `DoorSizeReference` — **real data**, given by the business owner. Advice-only: informs what the agent recommends/asks, never overrides a size the customer stated. |
 | OCR | `OcrProvider` | `MockOcrProvider` | plug in a real OCR SDK behind the same interface |
 | STT | `SttProvider` | `MockSttProvider` | plug in Whisper (or similar) behind the same interface |
 
