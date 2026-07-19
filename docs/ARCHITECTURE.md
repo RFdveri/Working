@@ -47,7 +47,7 @@ sending it to the customer.
 | Concern | Interface | Default (mock) | Real implementation |
 |---|---|---|---|
 | LLM reasoning | `LlmProvider` | `MockLlmProvider` (echoes input) | `AnthropicProvider` (set `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`) |
-| Catalog | `CatalogClient` | — | `RfDveriCatalogClient` (HTTP scrape of rf-dveri.ru; **selectors are placeholders**, see the file's header comment) |
+| Catalog | `CatalogClient` | — | `RfDveriYmlCatalogClient` — **real**, reads the live rf-dveri.ru YML export feed (`CATALOG_FEED_URL`, ~7000 offers), cached on a TTL. See caveats below. |
 | AmoCRM | — | `null` when unconfigured (agents degrade to "not configured" + a clarifying question) | `AmoCrmClient` (OAuth + REST) |
 | Service/custom-size pricing | `ServicePriceProvider` | `JsonServicePriceProvider` reading `config/service-prices.json` (starts empty) | Same interface, swap the JSON for a real price-list source |
 | OCR | `OcrProvider` | `MockOcrProvider` | plug in a real OCR SDK behind the same interface |
@@ -66,10 +66,41 @@ these agents must be pass-throughs to the actual source of truth, not
 LLM-generated guesses — the "intelligence" belongs in `DirectorAgent`'s
 routing and `HumanSalesAgent`'s phrasing, not in these lookups.
 
+## The catalog feed (`RfDveriYmlCatalogClient`)
+
+Reads the real YML (Yandex Market) export at `CATALOG_FEED_URL` — a
+Windows-1251-encoded XML feed with ~7000 offers, no auth required. Notes:
+
+- The feed is fetched and parsed once, then cached for `CATALOG_FEED_TTL_MS`
+  (default 30 min); concurrent callers during a refresh share one in-flight
+  fetch instead of triggering duplicate downloads.
+- The feed only carries `id`/`vendorCode`/`price`/`url`/`picture(s)`/`name`/
+  `description`/`vendor`/`categoryId` — there's no structured width/height/
+  covering field. `color`, `material`, `covering`, `weightKg`, `collection`
+  (series), and `installation` are extracted from the free-text
+  `description` with regexes tuned to the interior-door description
+  template. That template doesn't cover every offer:
+  - Entry doors (входные двери) and hardware/accessories use different
+    description templates, so some of these fields come back `undefined`
+    for them, or occasionally over-capture into `coveringRaw` — never a
+    fabricated value, just a field the extractor couldn't cleanly parse.
+  - `covering` maps a small set of known keywords (эмаль, экошпон/шпон, пвх,
+    полипропилен, ламинат) to the shared `CoveringMaterial` enum; anything
+    else is `"other"` with the raw source text kept in `coveringRaw` rather
+    than being forced into the wrong bucket.
+  - The feed's `available` attribute is `"true"` for every offer in current
+    exports — treat `availability: "in-stock"` as "listed", not as a live
+    stock guarantee, until this is cross-checked against a real inventory
+    source.
+- Search is in-process token-matching (no external search engine): the query
+  is tokenized, matched against a precomputed per-offer haystack
+  (name/sku/collection/color/material/covering/vendor/category), and results
+  are ranked by token-match count. Good enough for conversational queries at
+  ~7000 offers; swap for a real search index if the catalog grows much larger
+  or ranking quality needs to improve.
+
 ## Known scaffold limitations (by design, see the task's scope discussion)
 
-- `RfDveriCatalogClient` scrapes HTML with placeholder CSS selectors — it will
-  need real selectors (or a real API/export) before it returns real data.
 - `JsonServicePriceProvider` starts with an empty price list — the Price Agent
   correctly refuses to compute totals for services/custom sizes until you fill
   `services/backend/src/config/service-prices.json`.

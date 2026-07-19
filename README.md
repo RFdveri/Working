@@ -8,10 +8,10 @@ packaging steps.
 ## Status
 
 This is an architecture scaffold: real, working code for every module in the
-spec (Director + 11 specialist agents, AmoCRM OAuth client, catalog client,
-pricing engine, widget UI), wired together behind clean interfaces so mocked
-pieces (LLM, OCR, STT, catalog scraping selectors, service price list) can be
-swapped for production integrations without touching agent logic. See
+spec (Director + 11 specialist agents, AmoCRM OAuth client, a live rf-dveri.ru
+catalog feed, pricing engine, widget UI), wired together behind clean
+interfaces so the remaining mocked pieces (LLM, OCR, STT, service price list)
+can be swapped for production integrations without touching agent logic. See
 "Known scaffold limitations" in `docs/ARCHITECTURE.md` before treating any
 environment as production-ready.
 
@@ -55,7 +55,7 @@ npm run build
 |---|---|
 | `AMOCRM_SUBDOMAIN`, `AMOCRM_CLIENT_ID`, `AMOCRM_CLIENT_SECRET` | AmoCRM OAuth + CRM operations (deals/contacts/notes/tasks/Digital Pipeline) |
 | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` | Real LLM reasoning for Human Sales / Material Expert / Vision / Summary agents (defaults to a mock echo provider) |
-| `CATALOG_BASE_URL`, `CATALOG_API_KEY` | rf-dveri.ru catalog lookups (see the header comment in `RfDveriCatalogClient` — selectors need verifying against the live site) |
+| `CATALOG_FEED_URL`, `CATALOG_FEED_TTL_MS` | rf-dveri.ru catalog — **already real by default**, reads the live YML export feed (see `docs/ARCHITECTURE.md` for what's extracted vs. left blank) |
 | `services/backend/src/config/service-prices.json` | Installation/measurement/delivery prices and the custom-size surcharge rule — the Price Agent refuses to guess these |
 
 Until these are configured, the corresponding agents return a clarifying

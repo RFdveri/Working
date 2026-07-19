@@ -25,7 +25,11 @@ export const env = {
 
   catalog: {
     baseUrl: required("CATALOG_BASE_URL", "https://rf-dveri.ru"),
-    apiKey: optional("CATALOG_API_KEY"),
+    feedUrl: required(
+      "CATALOG_FEED_URL",
+      "https://www.rf-dveri.ru/admin/exchange/get_export/4998349/?as_file=0"
+    ),
+    feedTtlMs: Number(optional("CATALOG_FEED_TTL_MS") ?? 30 * 60 * 1000),
   },
 
   llm: {

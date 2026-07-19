@@ -13,10 +13,10 @@
   "dependencies": {
     "@ai-door-assistant/shared": "*",
     "@anthropic-ai/sdk": "^0.32.1",
-    "cheerio": "^1.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
+    "fast-xml-parser": "^4.5.0",
     "uuid": "^9.0.1",
     "zod": "^3.23.8"
   },
