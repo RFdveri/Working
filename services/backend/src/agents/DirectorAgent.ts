@@ -29,6 +29,50 @@ const PRICE_INTENT = /цен|сто[ий]т|сколько/i;
 const KIT_INTENT = /комплект|под ключ|коробк|наличник/i;
 const DEFAULT_KIT_FRAME_QUANTITY = 3;
 const DEFAULT_KIT_CASING_QUANTITY = 5;
+
+// Generic words that show up in most door names/descriptions and don't
+// identify a specific model on their own (material, door-leaf type, common
+// structural words) — excluded when checking whether the customer explicitly
+// named a *different* product than the one the conversation is anchored to.
+const GENERIC_PRODUCT_NAME_WORDS = new Set([
+  "дверь",
+  "двери",
+  "массива",
+  "массив",
+  "ольхи",
+  "ольха",
+  "сосны",
+  "сосна",
+  "дуба",
+  "дуб",
+  "мдф",
+  "стекло",
+  "стеклом",
+  "эмаль",
+  "эмали",
+  "белый",
+  "белая",
+  "белое",
+  "черный",
+  "черная",
+]);
+
+/**
+ * True when the customer's own text names this product specifically (a
+ * capitalized model word like "Валенсия"), as opposed to just matching on
+ * generic material/color words a full-text search also matches on.
+ */
+function mentionsProductByName(product: Product, text: string): boolean {
+  const lowerText = text.toLowerCase();
+  return product.name
+    .replace(/[()]/g, " ")
+    .split(/\s+/)
+    .some((word) => {
+      const normalized = word.replace(/[.,]/g, "").toLowerCase();
+      if (normalized.length < 5 || GENERIC_PRODUCT_NAME_WORDS.has(normalized)) return false;
+      return lowerText.includes(normalized);
+    });
+}
 const ATTACHMENT_KIND_TO_MIME: Record<string, string> = {
   image: "image/jpeg",
   pdf: "application/pdf",
@@ -109,9 +153,16 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
           .join("; ")}. `;
       }
 
-      const primaryProduct = anchoredProduct ?? foundProducts[0];
+      // Search ranks by raw token-match count, so a generic word shared with
+      // many offers (e.g. "античный орех") can outrank the specific model the
+      // customer actually named — scan the whole result set for an explicit
+      // name match rather than trusting foundProducts[0] alone.
+      const explicitMatch = foundProducts.find((p) => mentionsProductByName(p, enrichedText));
+      const isExplicitSwitch = explicitMatch && (!anchoredProduct || explicitMatch.id !== anchoredProduct.id);
+
+      const primaryProduct = explicitMatch ?? anchoredProduct ?? foundProducts[0];
       if (primaryProduct) {
-        if (!focusProduct) {
+        if (!focusProduct || isExplicitSwitch) {
           focusProduct = { id: primaryProduct.id, sku: primaryProduct.sku, name: primaryProduct.name };
         }
         // Repeated every turn (not just when first established) so the sales
