@@ -26,9 +26,25 @@ export interface DirectorInput {
 export type DirectorPayload = ChatTurnResult;
 
 const PRICE_INTENT = /цен|сто[ий]т|сколько/i;
-const KIT_INTENT = /комплект|под ключ|коробк|наличник/i;
+const KIT_INTENT = /комплект|под ключ|коробк|наличник|добор/i;
 const DEFAULT_KIT_FRAME_QUANTITY = 3;
 const DEFAULT_KIT_CASING_QUANTITY = 5;
+// \w (and \b, which is built on it) only matches ASCII word characters in JS —
+// it silently fails to extend across Cyrillic letters, so word stems use an
+// explicit [а-яё]* class instead, and the unit is bounded with a negative
+// lookahead rather than a trailing \b.
+const WALL_THICKNESS_PATTERN =
+  /(?:толщин[а-яё]*\s+стен[а-яё]*|стен[а-яё]*\s+толщин[а-яё]*)\D{0,10}(\d+(?:[.,]\d+)?)\s*(мм|см|м)(?![а-яё])/iu;
+
+/** Parses "толщина стены 14см" (or the reverse word order) into millimeters. */
+function parseWallThicknessMm(text: string): number | undefined {
+  const match = WALL_THICKNESS_PATTERN.exec(text);
+  if (!match) return undefined;
+  const value = Number(match[1].replace(",", "."));
+  const unit = match[2].toLowerCase();
+  const multiplier = unit === "мм" ? 1 : unit === "см" ? 10 : 1000;
+  return value * multiplier;
+}
 
 // Generic words that show up in most door names/descriptions and don't
 // identify a specific model on their own (material, door-leaf type, common
@@ -144,7 +160,14 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
     if (enrichedText.trim().length > 0) {
       const searchResult = await this.search.handle(context, { text: enrichedText });
       logs.push(...searchResult.logs);
-      foundProducts = searchResult.payload ?? [];
+      // Excludes standalone hardware/accessory offers (коробка, наличник, добор,
+      // капитель, ...) — these are never the door itself, only priced as kit
+      // components via PriceAgent's configurator-backed `kit` resolution. Without
+      // this, a customer just saying "добор" could switch the conversation's focus
+      // to a "Добор ..." accessory SKU instead of the door being discussed.
+      foundProducts = (searchResult.payload ?? []).filter(
+        (p) => !p.characteristics.categoryPath?.includes("Комплектующие")
+      );
       if (searchResult.clarifyingQuestions) clarifyingQuestions.push(...searchResult.clarifyingQuestions);
 
       if (foundProducts.length > 0) {
@@ -175,7 +198,11 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
           const priceResult = await this.price.handle(context, {
             product: primaryProduct,
             kit: wantsKit
-              ? { frameQuantity: DEFAULT_KIT_FRAME_QUANTITY, casingQuantity: DEFAULT_KIT_CASING_QUANTITY }
+              ? {
+                  frameQuantity: DEFAULT_KIT_FRAME_QUANTITY,
+                  casingQuantity: DEFAULT_KIT_CASING_QUANTITY,
+                  wallThicknessMm: parseWallThicknessMm(enrichedText),
+                }
               : undefined,
           });
           logs.push(...priceResult.logs);

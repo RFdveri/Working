@@ -75,6 +75,13 @@ export interface CalculatePriceRequest {
   customSize?: { widthMm: number; heightMm: number };
   services?: string[];
   components?: Array<{ sku: string; quantity: number; role?: string }>;
+  kit?: {
+    frameQuantity: number;
+    casingQuantity: number;
+    doorQuantity?: number;
+    wallThicknessMm?: number;
+    jambExtensionQuantity?: number;
+  };
 }
 
 export function calculatePrice(id: string, body: CalculatePriceRequest) {

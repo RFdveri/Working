@@ -72,6 +72,9 @@ const calculatePriceSchema = z.object({
     .object({
       frameQuantity: z.number().positive(),
       casingQuantity: z.number().positive(),
+      doorQuantity: z.number().positive().optional(),
+      wallThicknessMm: z.number().positive().optional(),
+      jambExtensionQuantity: z.number().positive().optional(),
     })
     .optional(),
 });

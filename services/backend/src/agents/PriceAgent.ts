@@ -6,7 +6,7 @@ import type {
   Product,
 } from "@ai-door-assistant/shared";
 import type { CatalogClient } from "../integrations/catalog/CatalogClient.js";
-import type { ProductConfiguratorClient } from "../integrations/catalog/ProductConfiguratorClient.js";
+import type { KitComponentOption, ProductConfiguratorClient } from "../integrations/catalog/ProductConfiguratorClient.js";
 import type { ServicePriceProvider } from "../integrations/pricing/ServicePriceProvider.js";
 import { log } from "./support.js";
 
@@ -19,10 +19,21 @@ export interface PriceKitComponent {
 }
 
 export interface PriceKitRequest {
-  /** Number of frame ("коробка") pieces — a standard door opening kit uses 3. */
+  /** Number of frame ("коробка") pieces per door — a standard door opening kit uses 3. */
   frameQuantity: number;
-  /** Number of casing ("наличник") pieces — a standard door opening kit uses 5. */
+  /** Number of casing ("наличник") pieces per door — a standard door opening kit uses 5. */
   casingQuantity: number;
+  /** How many complete doors this order covers — every kit quantity below is per-door and gets multiplied by this. Defaults to 1. */
+  doorQuantity?: number;
+  /**
+   * Wall thickness in mm. If it exceeds the frame's own depth (parsed from its
+   * label, e.g. "...40" in "Массив дерева 2080x75x40"), a matching добор
+   * (jamb extension) option is looked up by the extra depth it covers — never
+   * guessed, only picked when the door's configurator has one.
+   */
+  wallThicknessMm?: number;
+  /** добор pieces per door — defaults to frameQuantity (it runs the same three sides as the frame). */
+  jambExtensionQuantity?: number;
 }
 
 export interface PriceAgentInput {
@@ -89,10 +100,13 @@ export class PriceAgent implements Agent<PriceAgentInput, PriceCalculation> {
       });
     }
 
+    const doorQuantity = input.kit?.doorQuantity ?? 1;
+
     if (input.kit) {
       const groups = await this.productConfigurator.getComponentGroups(input.product.url);
 
       const frameGroup = groups.find((g) => /коробк/iu.test(g.role));
+      let frameDepthMm: number | undefined;
       if (!frameGroup || frameGroup.options.length === 0) {
         missingInputs.push(
           `На странице модели "${input.product.name}" не нашлось вариантов коробки — уточните у менеджера.`
@@ -103,9 +117,11 @@ export class PriceAgent implements Agent<PriceAgentInput, PriceCalculation> {
         );
       } else {
         const [frame] = frameGroup.options;
+        const frameQuantity = input.kit.frameQuantity * doorQuantity;
+        frameDepthMm = parseDimensions(frame.label)?.[2];
         components.push({
-          label: `Коробка: ${frame.label} × ${input.kit.frameQuantity}`,
-          amount: frame.price * input.kit.frameQuantity,
+          label: `Коробка: ${frame.label} × ${frameQuantity}`,
+          amount: frame.price * frameQuantity,
         });
       }
 
@@ -117,10 +133,56 @@ export class PriceAgent implements Agent<PriceAgentInput, PriceCalculation> {
         );
       } else {
         const casing = flatCasings.reduce((cheapest, o) => (o.price < cheapest.price ? o : cheapest));
+        const casingQuantity = input.kit.casingQuantity * doorQuantity;
         components.push({
-          label: `Наличник: ${casing.label} × ${input.kit.casingQuantity}`,
-          amount: casing.price * input.kit.casingQuantity,
+          label: `Наличник: ${casing.label} × ${casingQuantity}`,
+          amount: casing.price * casingQuantity,
         });
+      }
+
+      if (input.kit.wallThicknessMm !== undefined) {
+        if (frameDepthMm === undefined) {
+          missingInputs.push(
+            "Не удалось определить глубину коробки по её описанию, чтобы проверить, нужен ли добор — уточните у менеджера."
+          );
+        } else {
+          const neededExtensionMm = input.kit.wallThicknessMm - frameDepthMm;
+          if (neededExtensionMm > 0) {
+            const jambGroup = groups.find((g) => /добор/iu.test(g.role));
+            const jambOptions = (jambGroup?.options ?? [])
+              .map((option) => ({ option, extensionMm: parseDimensions(option.label)?.[1] }))
+              .filter((o): o is { option: KitComponentOption; extensionMm: number } => o.extensionMm !== undefined);
+
+            if (jambOptions.length === 0) {
+              missingInputs.push(
+                `Стена (${input.kit.wallThicknessMm} мм) толще глубины коробки (${frameDepthMm} мм) — нужен добор минимум на ${neededExtensionMm} мм, но вариантов добора для этой модели не нашлось — уточните у менеджера.`
+              );
+            } else {
+              const exact = jambOptions.find((o) => o.extensionMm === neededExtensionMm);
+              const fitting = jambOptions
+                .filter((o) => o.extensionMm >= neededExtensionMm)
+                .sort((a, b) => a.extensionMm - b.extensionMm);
+              const chosen = exact ?? fitting[0];
+
+              if (!chosen) {
+                missingInputs.push(
+                  `Нужен добор минимум на ${neededExtensionMm} мм, но среди вариантов (${jambOptions.map((o) => `${o.option.label}: ${o.extensionMm} мм`).join(", ")}) нет подходящего — уточните у менеджера.`
+                );
+              } else {
+                const jambQuantity = (input.kit.jambExtensionQuantity ?? input.kit.frameQuantity) * doorQuantity;
+                components.push({
+                  label: `Добор: ${chosen.option.label} × ${jambQuantity}`,
+                  amount: chosen.option.price * jambQuantity,
+                });
+                if (!exact) {
+                  missingInputs.push(
+                    `Точного добора на ${neededExtensionMm} мм нет — взят ближайший больший вариант "${chosen.option.label}" (${chosen.extensionMm} мм), подтвердите у менеджера, что он подходит.`
+                  );
+                }
+              }
+            }
+          }
+        }
       }
     }
 
@@ -154,15 +216,19 @@ export class PriceAgent implements Agent<PriceAgentInput, PriceCalculation> {
       services.push({ label: serviceKey, amount: price });
     }
 
+    const doorAmount = (input.product.price ?? 0) * doorQuantity;
     const total =
-      (input.product.price ?? 0) +
+      doorAmount +
       components.reduce((sum, c) => sum + c.amount, 0) +
       (customSizeSurcharge?.amount ?? 0) +
       services.reduce((sum, s) => sum + s.amount, 0);
 
     const calculation: PriceCalculation = {
       currency,
-      door: { label: input.product.name, amount: input.product.price ?? 0 },
+      door: {
+        label: doorQuantity > 1 ? `${input.product.name} × ${doorQuantity}` : input.product.name,
+        amount: doorAmount,
+      },
       components,
       customSizeSurcharge,
       services,
@@ -177,4 +243,16 @@ export class PriceAgent implements Agent<PriceAgentInput, PriceCalculation> {
       clarifyingQuestions: missingInputs.length > 0 ? missingInputs : undefined,
     };
   }
+}
+
+/**
+ * Extracts the "AxBxC"-style millimeter dimensions from a configurator option
+ * label (e.g. "Массив дерева 2080x75x40" -> [2080, 75, 40], "Телескопический
+ * 2070x100x16" -> [2070, 100, 16]). Returns undefined when the label doesn't
+ * match — callers must not guess a dimension that wasn't actually parsed.
+ */
+function parseDimensions(label: string): number[] | undefined {
+  const match = /(\d+)\s*[x×]\s*(\d+)\s*[x×]\s*(\d+)/iu.exec(label);
+  if (!match) return undefined;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
 }

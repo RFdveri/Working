@@ -28,14 +28,18 @@ packages/shared       TypeScript types shared by both (Agent contracts,
      re-resolved by SKU via `ProductAgent`; if there's no anchor yet, the
      fresh search's top result becomes it.
    - If the message has price intent or mentions a kit ("комплект"/"под
-     ключ"/"коробк"/"наличник"), `PriceAgent` computes a `PriceCalculation`
-     for the anchored product — kits use `{ kit: { frameQuantity,
-     casingQuantity } }` to auto-resolve the frame/casing from the door's own
-     product-page configurator (see "The catalog feed" below). Either way, an
-     ambiguous or missing match becomes a clarifying question, never a guess.
-     (The same `POST /api/conversations/:id/price` endpoint also accepts
-     explicit `{ sku, quantity, role }[]` components directly, outside the
-     conversational flow.)
+     ключ"/"коробк"/"наличник"/"добор"), `PriceAgent` computes a
+     `PriceCalculation` for the anchored product — kits use `{ kit: {
+     frameQuantity, casingQuantity, doorQuantity?, wallThicknessMm?,
+     jambExtensionQuantity? } }` to auto-resolve the frame/casing (and,
+     when the wall is thicker than the frame, the добор/jamb-extension board)
+     from the door's own product-page configurator (see "The catalog feed"
+     below). `doorQuantity` multiplies every per-door quantity so a bulk order
+     (e.g. 5 doors) is one code-computed total, not the LLM doing the
+     multiplication itself. Any ambiguous or missing match becomes a
+     clarifying question, never a guess. (The same `POST
+     /api/conversations/:id/price` endpoint also accepts explicit `{ sku,
+     quantity, role }[]` components directly, outside the conversational flow.)
    - `HumanSalesAgent` (LLM-backed) drafts the customer-facing reply, grounded
      only in the facts the steps above actually found.
    - `CrmAgent` files an AmoCRM note with the AI's reply, if a deal is linked.
@@ -72,11 +76,47 @@ found" grounding text, but never silently override what's being priced.
 just once) so `HumanSalesAgent` doesn't drift to a different item it saw in
 that turn's search results.
 
-This is intentionally simple: focus, once set, doesn't change unless the
-conversation never had one. A customer switching to a genuinely different
-door mid-conversation isn't handled (a real intent classifier would be
-needed to detect that safely) — documented here as a known limitation
-rather than a silent behavior.
+The focus is sticky by default, but `mentionsProductByName()` allows an
+explicit switch: if the customer's own text contains a distinctive 5+ letter
+word from a *different* search result's name (not a generic material/color
+word — see `GENERIC_PRODUCT_NAME_WORDS`), focus moves to that product even
+mid-conversation. This needed two follow-up fixes, both found by live
+testing:
+
+- The check originally only looked at the search's top-ranked result. Search
+  ranks by raw token-match count, so a phrase shared with many offers (e.g.
+  "античный орех", present in dozens of unrelated products) can outrank the
+  specific model the customer typed — a customer naming "Валенсия" mid-
+  conversation didn't switch focus because Валенсия was ranked 13th, not
+  1st. Fixed by scanning the *entire* result list for an explicit match, not
+  just index 0.
+- Standalone hardware/accessory offers (коробка, наличник, добор, капитель,
+  ...) are themselves catalog products literally named "Добор ...", "Коробка
+  ...". Once the accessory-name check was scanning the whole result list, a
+  customer just asking about "добор" matched an actual "Добор телескопический
+  ..." accessory SKU by name and switched focus to *that*, instead of staying
+  on the door. Fixed by excluding anything under the "Комплектующие" category
+  path from `foundProducts` before it's ever considered as a focus candidate
+  — those are only ever kit *components* of a door, never the door itself.
+
+## Bulk kits with jamb extensions (добор) and multiple doors
+
+Found while pricing a real 5-door order: `PriceAgent`'s `kit` input now
+supports `doorQuantity` (every per-door quantity — frame, casing, jamb
+extension — is multiplied by it, so a bulk order is one code-computed total
+instead of the LLM doing the multiplication itself) and `wallThicknessMm`.
+
+When a wall is thicker than the frame's own depth, a добор (jamb extension)
+board is needed to fill the gap — a real, common requirement, not an edge
+case. `PriceAgent` parses the frame's depth from its configurator label
+(e.g. the trailing "40" in "Массив дерева 2080x75x40") and the extension
+each добор option covers (e.g. "100" in "Телескопический 2070x100x16"), then
+picks the option whose extension exactly covers `wallThicknessMm - frameDepth`
+— falling back to the next size up (and saying so) only when there's no
+exact match, and asking a clarifying question when there's no добор option
+at all rather than picking one arbitrarily. Verified against a real 140mm
+wall: 140 − 40 = 100mm needed, which matched the "2070x100x16" option
+exactly.
 
 ## Guarding against LLM fabrication
 
@@ -104,6 +144,18 @@ message got no reply and no error, anywhere. It now throws (with the
 surfaces as a real error instead of a silently dropped conversation turn,
 and `max_tokens` was raised (1024 → 4096) since a verbose sales reply was
 observed hitting the ceiling.
+
+## Recurring pitfall: `\w` and `\b` don't match Cyrillic in JS
+
+Hit twice in this codebase (the catalog covering-keyword matcher, and
+`DirectorAgent`'s wall-thickness parser) — `\w` in JavaScript regex is
+ASCII-only ([A-Za-z0-9_]), and `\b` is defined in terms of `\w`, so both
+silently fail to extend across or bound Cyrillic text. `толщин\w*` matches
+only the literal ASCII-free prefix "толщин" (zero extension), and a trailing
+`\b` after a Cyrillic unit like "см" never matches at all. Use an explicit
+`[а-яё]*` character class for word stems, and a negative lookahead
+(`(?![а-яё])`) instead of `\b` to bound a match. If you write a new regex
+over Russian text anywhere in this codebase, check for `\w`/`\b` first.
 
 ## Where mocks vs. real integrations live
 
