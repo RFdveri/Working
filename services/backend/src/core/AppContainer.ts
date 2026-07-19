@@ -1,7 +1,8 @@
 import { createAmoCrmClient } from "../integrations/amocrm/index.js";
 import type { AmoCrmClient } from "../integrations/amocrm/AmoCrmClient.js";
-import { createCatalogClient } from "../integrations/catalog/index.js";
+import { createCatalogClient, createProductConfiguratorClient } from "../integrations/catalog/index.js";
 import type { CatalogClient } from "../integrations/catalog/CatalogClient.js";
+import type { ProductConfiguratorClient } from "../integrations/catalog/ProductConfiguratorClient.js";
 import { createLlmProvider } from "../integrations/llm/index.js";
 import type { LlmProvider } from "../integrations/llm/LlmProvider.js";
 import { MockOcrProvider, type OcrProvider } from "../integrations/ocr/OcrProvider.js";
@@ -34,6 +35,7 @@ import { InMemoryMemoryStore, type MemoryStore } from "./memory/MemoryStore.js";
 export class AppContainer {
   readonly amoCrm: AmoCrmClient | null;
   readonly catalog: CatalogClient;
+  readonly productConfigurator: ProductConfiguratorClient;
   readonly llm: LlmProvider;
   readonly ocr: OcrProvider;
   readonly stt: SttProvider;
@@ -58,6 +60,7 @@ export class AppContainer {
   constructor() {
     this.amoCrm = createAmoCrmClient();
     this.catalog = createCatalogClient();
+    this.productConfigurator = createProductConfiguratorClient();
     this.llm = createLlmProvider();
     this.ocr = new MockOcrProvider();
     this.stt = new MockSttProvider();
@@ -66,7 +69,7 @@ export class AppContainer {
     this.crmAgent = new CrmAgent(this.amoCrm);
     this.productAgent = new ProductAgent(this.catalog);
     this.searchAgent = new SearchAgent(this.catalog);
-    this.priceAgent = new PriceAgent(this.catalog, this.servicePrices);
+    this.priceAgent = new PriceAgent(this.catalog, this.servicePrices, this.productConfigurator);
     this.materialExpertAgent = new MaterialExpertAgent(this.llm);
     this.humanSalesAgent = new HumanSalesAgent(this.llm);
     this.visionAgent = new VisionAgent(this.llm);

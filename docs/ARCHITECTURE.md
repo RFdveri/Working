@@ -27,9 +27,11 @@ packages/shared       TypeScript types shared by both (Agent contracts,
    - If the message has price intent, `PriceAgent` computes a `PriceCalculation`
      — and lists exactly which inputs were missing instead of guessing them.
      Kits (door leaf + frame + casing, etc.) are priced via `POST
-     /api/conversations/:id/price` with explicit `{ sku, quantity, role }[]`
-     components — the agent looks each SKU up in the real catalog and refuses
-     to pick a frame/casing on the customer's behalf when none is given.
+     /api/conversations/:id/price`, either with explicit `{ sku, quantity,
+     role }[]` components, or with `{ kit: { frameQuantity, casingQuantity } }`
+     to auto-resolve the frame/casing from the door's own product-page
+     configurator (see "The catalog feed" below) — either way, an ambiguous
+     or missing match becomes a clarifying question, never a guess.
    - `HumanSalesAgent` (LLM-backed) drafts the customer-facing reply, grounded
      only in the facts the steps above actually found.
    - `CrmAgent` files an AmoCRM note with the AI's reply, if a deal is linked.
@@ -52,6 +54,7 @@ sending it to the customer.
 |---|---|---|---|
 | LLM reasoning | `LlmProvider` | `MockLlmProvider` (echoes input) | `AnthropicProvider` (set `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`) |
 | Catalog | `CatalogClient` | — | `RfDveriYmlCatalogClient` — **real**, reads the live rf-dveri.ru YML export feed (`CATALOG_FEED_URL`, ~7000 offers), cached on a TTL. See caveats below. |
+| Per-door kit options (frame/casing) | `ProductConfiguratorClient` | — | `RfDveriProductConfiguratorClient` — **real**, scrapes a door's own product page for its frame/casing/добор/плинтус configurator options (not in the feed at all). |
 | AmoCRM | — | `null` when unconfigured (agents degrade to "not configured" + a clarifying question) | `AmoCrmClient` (OAuth + REST) |
 | Service/custom-size pricing | `ServicePriceProvider` | `JsonServicePriceProvider` reading `config/service-prices.json` (starts empty) | Same interface, swap the JSON for a real price-list source |
 | OCR | `OcrProvider` | `MockOcrProvider` | plug in a real OCR SDK behind the same interface |
@@ -93,20 +96,35 @@ Windows-1251-encoded XML feed with ~7000 offers, no auth required. Notes:
     else is `"other"` with the raw source text kept in `coveringRaw` rather
     than being forced into the wrong bucket.
   - The feed's `available` attribute is `"true"` for every offer in current
-    exports — treat `availability: "in-stock"` as "listed", not as a live
-    stock guarantee, until this is cross-checked against a real inventory
-    source.
+    exports. This was initially flagged here as unreliable, but checking it
+    against the real product pages' visible stock badge
+    (`AvailabilityLabelForTheTradeOffer` — text "На складе"/"Под заказ")
+    showed it agreeing on every sample checked. **Don't** trust the
+    page's `itemprop="availability"` schema.org microdata for this, though —
+    it reads `OutOfStock` on every page checked regardless of the real,
+    visible badge; it looks like a stale/misconfigured SEO tag on this site,
+    unrelated to actual stock.
 - Search is in-process token-matching (no external search engine): the query
   is tokenized, matched against a precomputed per-offer haystack
   (name/sku/collection/color/material/covering/vendor/category), and results
   are ranked by token-match count. Good enough for conversational queries at
   ~7000 offers; swap for a real search index if the catalog grows much larger
   or ranking quality needs to improve.
-- Frame ("коробка") and casing ("наличник") are separate catalog SKUs, not
-  linked to a specific door model/color in the feed — `PriceAgent` can price
-  a kit (door + N×frame + M×casing) once given explicit SKUs+quantities
-  (`POST /api/conversations/:id/price`), but it will never pick one on its
-  own, since there's no reliable feed data to match a frame/casing to a door.
+- Frame ("коробка") and casing ("наличник") prices matched to a *specific*
+  door are **not in the YML feed at all** — they only exist as that door's
+  own product-page configurator (radio inputs with `data-price`, e.g.
+  `Коробка: Массив дерева 2080x75x40` → 1315 ₽). Standalone "Комплектующие"
+  offers in the feed (generic MDF telescoping frames/casings) are a
+  *different, unrelated* product line — verified by comparing a real
+  product's page (screenshot-driven) against feed search results, which
+  returned the wrong SKUs at the wrong prices. `RfDveriProductConfiguratorClient`
+  scrapes a door's own page for its real frame/casing/добор/плинтус options;
+  `PriceAgent`'s `kit` input auto-picks the frame when there's exactly one
+  option and the cheapest "прямой" (flat/straight) casing — the store's own
+  default-casing convention — and turns anything ambiguous (multiple frame
+  options, no matching casing) into a clarifying question instead of a guess.
+  `PriceAgent`'s `components` input (explicit SKU+quantity) still works for
+  cases the configurator doesn't cover.
 - The XML parser (`fast-xml-parser`) is configured with `parseTagValue:
   false` deliberately — its default number-coercion silently turned some
   numeric-looking `vendorCode` values into JS numbers, which crashed

@@ -67,6 +67,12 @@ const calculatePriceSchema = z.object({
       })
     )
     .optional(),
+  kit: z
+    .object({
+      frameQuantity: z.number().positive(),
+      casingQuantity: z.number().positive(),
+    })
+    .optional(),
 });
 
 export function createWidgetRouter(app: AppContainer): Router {
@@ -176,6 +182,7 @@ export function createWidgetRouter(app: AppContainer): Router {
         customSize: body.customSize,
         services: body.services,
         components: body.components,
+        kit: body.kit,
       });
       app.conversations.appendLogs(conversation.id, [...product.logs, ...result.logs]);
       res.status(201).json(result.payload);
