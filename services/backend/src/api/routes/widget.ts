@@ -14,6 +14,7 @@ async function buildContext(app: AppContainer, conversation: Conversation): Prom
     managerActive: conversation.managerActive,
     memory: conversation.contactId ? await app.memory.get(conversation.contactId) : createEmptyMemory(),
     history: conversation.messages,
+    focusProduct: conversation.focusProduct,
   };
 }
 
@@ -123,6 +124,10 @@ export function createWidgetRouter(app: AppContainer): Router {
       const context = await buildContext(app, conversation);
       const result = await app.directorAgent.handle(context, { message });
       conversation = app.conversations.appendLogs(conversationId, result.logs);
+
+      if (result.payload?.focusProduct) {
+        conversation = app.conversations.setFocusProduct(conversationId, result.payload.focusProduct);
+      }
 
       if (result.reply) {
         conversation = app.conversations.appendMessage(conversationId, {

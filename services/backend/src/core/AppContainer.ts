@@ -81,6 +81,7 @@ export class AppContainer {
     this.directorAgent = new DirectorAgent(
       this.searchAgent,
       this.priceAgent,
+      this.productAgent,
       this.humanSalesAgent,
       this.visionAgent,
       this.documentAgent,

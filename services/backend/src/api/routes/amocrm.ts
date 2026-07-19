@@ -58,10 +58,15 @@ export function createAmoCrmRouter(app: AppContainer): Router {
         managerActive: conversation.managerActive,
         memory: conversation.contactId ? await app.memory.get(conversation.contactId) : createEmptyMemory(),
         history: conversation.messages,
+        focusProduct: conversation.focusProduct,
       };
 
       const result = await app.directorAgent.handle(context, { message });
       app.conversations.appendLogs(conversation.id, result.logs);
+
+      if (result.payload?.focusProduct) {
+        app.conversations.setFocusProduct(conversation.id, result.payload.focusProduct);
+      }
 
       if (result.reply && app.amoCrm) {
         await app.amoCrm.sendDigitalPipelineMessage(body.dealId, result.reply, "widget");

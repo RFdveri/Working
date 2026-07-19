@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentLogEntry,
   AssistantMode,
+  FocusProductRef,
   Message,
 } from "@ai-door-assistant/shared";
 
@@ -13,6 +14,7 @@ export interface Conversation {
   managerActive: boolean;
   messages: Message[];
   logs: AgentLogEntry[];
+  focusProduct?: FocusProductRef;
 }
 
 /**
@@ -82,6 +84,12 @@ export class ConversationManager {
     const conversation = this.requireConversation(conversationId);
     conversation.managerActive = true;
     conversation.mode = "hints-only";
+    return conversation;
+  }
+
+  setFocusProduct(conversationId: string, focusProduct: FocusProductRef): Conversation {
+    const conversation = this.requireConversation(conversationId);
+    conversation.focusProduct = focusProduct;
     return conversation;
   }
 }

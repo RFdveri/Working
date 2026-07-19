@@ -33,6 +33,12 @@ export interface AgentLogEntry {
  * Context passed to every agent invocation. Agents must treat this as read-only input
  * and return changes via AgentResult rather than mutating it directly.
  */
+export interface FocusProductRef {
+  id: string;
+  sku: string;
+  name: string;
+}
+
 export interface AgentContext {
   conversationId: string;
   dealId?: string;
@@ -42,6 +48,13 @@ export interface AgentContext {
   managerActive: boolean;
   memory: CustomerMemory;
   history: Message[];
+  /**
+   * The product the conversation is currently anchored to (once established), so
+   * price/kit calculations stay tied to it instead of re-searching from scratch
+   * on every turn — a later message that doesn't repeat the product's name would
+   * otherwise search-match something unrelated.
+   */
+  focusProduct?: FocusProductRef;
 }
 
 export interface AgentResult<TPayload = unknown> {

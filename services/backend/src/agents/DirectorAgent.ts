@@ -13,6 +13,7 @@ import type { CrmAgent } from "./CrmAgent.js";
 import type { DocumentAgent } from "./DocumentAgent.js";
 import type { HumanSalesAgent } from "./HumanSalesAgent.js";
 import type { PriceAgent } from "./PriceAgent.js";
+import type { ProductAgent } from "./ProductAgent.js";
 import type { SearchAgent } from "./SearchAgent.js";
 import type { VisionAgent } from "./VisionAgent.js";
 import type { VoiceAgent } from "./VoiceAgent.js";
@@ -25,6 +26,9 @@ export interface DirectorInput {
 export type DirectorPayload = ChatTurnResult;
 
 const PRICE_INTENT = /цен|сто[ий]т|сколько/i;
+const KIT_INTENT = /комплект|под ключ|коробк|наличник/i;
+const DEFAULT_KIT_FRAME_QUANTITY = 3;
+const DEFAULT_KIT_CASING_QUANTITY = 5;
 const ATTACHMENT_KIND_TO_MIME: Record<string, string> = {
   image: "image/jpeg",
   pdf: "application/pdf",
@@ -47,6 +51,7 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
   constructor(
     private readonly search: SearchAgent,
     private readonly price: PriceAgent,
+    private readonly product: ProductAgent,
     private readonly humanSales: HumanSalesAgent,
     private readonly vision: VisionAgent,
     private readonly document: DocumentAgent,
@@ -62,12 +67,12 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
 
     if (context.managerActive) {
       logs.push(log(this.name, "suppressed", "manager active — not replying to customer"));
-      return { agent: this.name, logs, payload: { foundProducts: [] } };
+      return { agent: this.name, logs, payload: { foundProducts: [], focusProduct: context.focusProduct } };
     }
 
     if (context.mode === "off") {
       logs.push(log(this.name, "suppressed", "mode=off"));
-      return { agent: this.name, logs, payload: { foundProducts: [] } };
+      return { agent: this.name, logs, payload: { foundProducts: [], focusProduct: context.focusProduct } };
     }
 
     const { text: enrichedText, extraLogs } = await this.enrichWithAttachments(
@@ -81,6 +86,17 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
     const clarifyingQuestions: string[] = [];
     let groundedContext = "";
 
+    // Resolve the product already anchoring this conversation (if any) by SKU, so a
+    // later turn that doesn't repeat the product's name can't silently price a
+    // different, unrelated item that a fresh full-text search happens to match.
+    let focusProduct = context.focusProduct;
+    let anchoredProduct: Product | undefined;
+    if (focusProduct) {
+      const focusLookup = await this.product.handle(context, { sku: focusProduct.sku });
+      logs.push(...focusLookup.logs);
+      anchoredProduct = focusLookup.payload ?? undefined;
+    }
+
     if (enrichedText.trim().length > 0) {
       const searchResult = await this.search.handle(context, { text: enrichedText });
       logs.push(...searchResult.logs);
@@ -91,13 +107,41 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
         groundedContext += `Найденные товары: ${foundProducts
           .map((p) => `${p.name} (${p.sku}), цена: ${p.price ?? "не указана"}`)
           .join("; ")}. `;
+      }
 
-        if (PRICE_INTENT.test(enrichedText)) {
-          const priceResult = await this.price.handle(context, { product: foundProducts[0] });
+      const primaryProduct = anchoredProduct ?? foundProducts[0];
+      if (primaryProduct) {
+        if (!focusProduct) {
+          focusProduct = { id: primaryProduct.id, sku: primaryProduct.sku, name: primaryProduct.name };
+        }
+        // Repeated every turn (not just when first established) so the sales
+        // reply stays anchored to this product even on turns where the fresh
+        // search above surfaces unrelated alternatives.
+        groundedContext += `Клиент сейчас обсуждает именно этот товар: ${primaryProduct.name} (${primaryProduct.sku}), цена ${primaryProduct.price ?? "не указана"}. Держись этого товара в ответе, если явно не попросили другой. `;
+
+        const wantsKit = KIT_INTENT.test(enrichedText);
+        if (PRICE_INTENT.test(enrichedText) || wantsKit) {
+          const priceResult = await this.price.handle(context, {
+            product: primaryProduct,
+            kit: wantsKit
+              ? { frameQuantity: DEFAULT_KIT_FRAME_QUANTITY, casingQuantity: DEFAULT_KIT_CASING_QUANTITY }
+              : undefined,
+          });
           logs.push(...priceResult.logs);
           priceCalculation = priceResult.payload;
           if (priceResult.payload) {
-            groundedContext += `Расчёт стоимости: итого ${priceResult.payload.total} ${priceResult.payload.currency}. `;
+            const lineItems = [
+              priceResult.payload.door,
+              ...priceResult.payload.components,
+              ...(priceResult.payload.customSizeSurcharge ? [priceResult.payload.customSizeSurcharge] : []),
+              ...priceResult.payload.services,
+            ]
+              .map((item) => `${item.label}: ${item.amount} ${priceResult.payload!.currency}`)
+              .join("; ");
+            groundedContext += `Расчёт стоимости (для товара ${primaryProduct.name}) — ${lineItems}; итого: ${priceResult.payload.total} ${priceResult.payload.currency}. `;
+            if (priceResult.payload.missingInputs.length > 0) {
+              groundedContext += `Данные, которых не хватает для полного расчёта (не придумывай их, спроси у клиента/менеджера): ${priceResult.payload.missingInputs.join(" ")} `;
+            }
           }
           if (priceResult.clarifyingQuestions) clarifyingQuestions.push(...priceResult.clarifyingQuestions);
         }
@@ -109,7 +153,7 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
       return {
         agent: this.name,
         logs,
-        payload: { foundProducts, priceCalculation },
+        payload: { foundProducts, priceCalculation, focusProduct },
         clarifyingQuestions: clarifyingQuestions.length > 0 ? clarifyingQuestions : undefined,
       };
     }
@@ -132,7 +176,7 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
     return {
       agent: this.name,
       reply: salesResult.reply,
-      payload: { reply: salesResult.reply, foundProducts, priceCalculation },
+      payload: { reply: salesResult.reply, foundProducts, priceCalculation, focusProduct },
       logs,
       clarifyingQuestions: clarifyingQuestions.length > 0 ? clarifyingQuestions : undefined,
     };

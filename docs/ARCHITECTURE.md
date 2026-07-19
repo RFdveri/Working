@@ -24,14 +24,18 @@ packages/shared       TypeScript types shared by both (Agent contracts,
    - Attachments go to `VisionAgent` / `DocumentAgent` / `VoiceAgent` first, and
      their extracted text is folded into the message.
    - `SearchAgent` looks the query up in the rf-dveri.ru catalog.
-   - If the message has price intent, `PriceAgent` computes a `PriceCalculation`
-     — and lists exactly which inputs were missing instead of guessing them.
-     Kits (door leaf + frame + casing, etc.) are priced via `POST
-     /api/conversations/:id/price`, either with explicit `{ sku, quantity,
-     role }[]` components, or with `{ kit: { frameQuantity, casingQuantity } }`
-     to auto-resolve the frame/casing from the door's own product-page
-     configurator (see "The catalog feed" below) — either way, an ambiguous
-     or missing match becomes a clarifying question, never a guess.
+   - The conversation's anchored product (`context.focusProduct`, see below) is
+     re-resolved by SKU via `ProductAgent`; if there's no anchor yet, the
+     fresh search's top result becomes it.
+   - If the message has price intent or mentions a kit ("комплект"/"под
+     ключ"/"коробк"/"наличник"), `PriceAgent` computes a `PriceCalculation`
+     for the anchored product — kits use `{ kit: { frameQuantity,
+     casingQuantity } }` to auto-resolve the frame/casing from the door's own
+     product-page configurator (see "The catalog feed" below). Either way, an
+     ambiguous or missing match becomes a clarifying question, never a guess.
+     (The same `POST /api/conversations/:id/price` endpoint also accepts
+     explicit `{ sku, quantity, role }[]` components directly, outside the
+     conversational flow.)
    - `HumanSalesAgent` (LLM-backed) drafts the customer-facing reply, grounded
      only in the facts the steps above actually found.
    - `CrmAgent` files an AmoCRM note with the AI's reply, if a deal is linked.
@@ -47,6 +51,59 @@ and returns immediately without calling `HumanSalesAgent` — the AI stops
 talking to the customer, and (in `hints-only` mode) keeps running the
 grounding steps (search/price) so the manager still gets that context, without ever
 sending it to the customer.
+
+## Conversation continuity: the focus product
+
+Found by testing a real multi-turn conversation: `DirectorAgent` used to
+re-run `SearchAgent` from scratch on every turn's raw text alone. Once a
+customer stopped repeating the product's name ("глухую беру, проём 2000×900"
+mentions no product), the fresh search matched a *different, unrelated*
+item, and `PriceAgent` priced that instead — silently wrong, not just
+un-grounded.
+
+Fix: `Conversation.focusProduct` (`{ id, sku, name }`) is set the first time
+a product is established and persists across turns (`ConversationManager
+.setFocusProduct`, read back into `AgentContext.focusProduct`). Every turn,
+`DirectorAgent` re-resolves that SKU via `ProductAgent` (a cheap catalog
+lookup, not a re-search) and uses *that* product for price/kit
+calculations — the turn's fresh search results still populate "other options
+found" grounding text, but never silently override what's being priced.
+`groundedContext` also repeats "Клиент сейчас обсуждает: ..." every turn (not
+just once) so `HumanSalesAgent` doesn't drift to a different item it saw in
+that turn's search results.
+
+This is intentionally simple: focus, once set, doesn't change unless the
+conversation never had one. A customer switching to a genuinely different
+door mid-conversation isn't handled (a real intent classifier would be
+needed to detect that safely) — documented here as a known limitation
+rather than a silent behavior.
+
+## Guarding against LLM fabrication
+
+A live test with a real Anthropic key caught `HumanSalesAgent` inventing a
+specific frame/casing SKU and price it was never given (a plausible-looking
+"Коробка стандартная 2100×70×28, 630 ₽" that wasn't in that turn's grounded
+facts at all). The original system prompt's "не выдумывай" instruction
+wasn't load-bearing enough on its own. Two changes:
+
+- The system prompt now states explicitly: any price/SKU/model/size named to
+  the customer **must** appear verbatim in "Факты для ответа"; if it's
+  missing, say so and ask, even if the number "seems typical" — the model is
+  told outright that it is not the source of truth, the catalog is.
+- `DirectorAgent` now actually calls `PriceAgent`'s kit resolution when the
+  customer's message signals wanting a full kit price, so the real
+  frame/casing facts are usually present in `groundedContext` for the model
+  to cite — before this, "посчитайте комплект" produced grounded context
+  with no component data at all, which is exactly when the model started
+  inventing one.
+
+Also caught by the same test: `AnthropicProvider` used to return `""`
+silently when a response had no text content, which meant one customer
+message got no reply and no error, anywhere. It now throws (with the
+`stop_reason` and content block types in the message) so a failed turn
+surfaces as a real error instead of a silently dropped conversation turn,
+and `max_tokens` was raised (1024 → 4096) since a verbose sales reply was
+observed hitting the ceiling.
 
 ## Where mocks vs. real integrations live
 
