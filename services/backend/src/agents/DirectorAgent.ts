@@ -50,10 +50,13 @@ function parseWallThicknessMm(text: string): number | undefined {
   return value * multiplier;
 }
 
-// Matches "3 двери 70" / "3 шт двери 70" style order-quantity+size mentions.
-// \D{0,15}? (non-digit, lazy) bridges words like "шириной"/"размером" between
-// the door-count word and the size number without needing \w on Cyrillic text.
-const DOOR_GROUP_PATTERN = /(\d+)\s*(?:шт\.?\s*)?двер[а-яё]*\D{0,15}?(\d+)/giu;
+// Matches "3 двери 70" / "3 шт двери 70" / "3 двери 80 на 200" style
+// order-quantity+size(+height) mentions. \D{0,15}? (non-digit, lazy) bridges
+// words like "шириной"/"размером" between the door-count word and the size
+// number without needing \w on Cyrillic text. The optional trailing group
+// captures a height when given as "W на H" / "WxH".
+const DOOR_GROUP_PATTERN =
+  /(\d+)\s*(?:шт\.?\s*)?двер[а-яё]*\D{0,15}?(\d+)(?:\s*(?:[x×хX]|на)\s*(\d+))?/giu;
 const LEAF_KEYWORD_PATTERN = /полотн[а-яё]*/iu;
 const OPENING_KEYWORD_PATTERN = /про[её]м[а-яё]*/iu;
 
@@ -89,7 +92,14 @@ function parseDoorGroups(text: string): OrderDoorGroup[] | undefined {
         ? "opening"
         : "unspecified";
 
-    groups.push({ quantity, widthMm, widthKind });
+    let heightMm: number | undefined;
+    const rawHeight = match[3] ? Number(match[3]) : undefined;
+    if (rawHeight) {
+      const candidateHeightMm = rawHeight <= 250 ? rawHeight * 10 : rawHeight;
+      if (candidateHeightMm >= 1500 && candidateHeightMm <= 2500) heightMm = candidateHeightMm;
+    }
+
+    groups.push({ quantity, widthMm, widthKind, heightMm, heightKind: heightMm !== undefined ? widthKind : undefined });
   }
   return groups.length > 0 ? groups : undefined;
 }
@@ -168,21 +178,37 @@ const GENERIC_PRODUCT_NAME_WORDS = new Set([
   "черная",
 ]);
 
+/** Lowercases and strips spaces/hyphens so "Скай-3" and "скай 3" compare equal. */
+function compact(value: string): string {
+  return value.toLowerCase().replace(/[\s-]+/g, "");
+}
+
 /**
  * True when the customer's own text names this product specifically (a
- * capitalized model word like "Валенсия"), as opposed to just matching on
- * generic material/color words a full-text search also matches on.
+ * distinguishing model word like "Валенсия" or "Скай-3"), as opposed to just
+ * matching on generic material/color words a full-text search also matches
+ * on. Matching is hyphen/space-insensitive since customers write "Скай-3" as
+ * "скай 3" as often as not, and the threshold is 4 chars (not 5) because
+ * plenty of real model names are short ("Скай", "Вита", "Уно").
  */
 function mentionsProductByName(product: Product, text: string): boolean {
-  const lowerText = text.toLowerCase();
+  const compactText = compact(text);
   return product.name
     .replace(/[()]/g, " ")
     .split(/\s+/)
     .some((word) => {
-      const normalized = word.replace(/[.,]/g, "").toLowerCase();
-      if (normalized.length < 5 || GENERIC_PRODUCT_NAME_WORDS.has(normalized)) return false;
-      return lowerText.includes(normalized);
+      const normalized = compact(word.replace(/[.,]/g, ""));
+      if (normalized.length < 4 || GENERIC_PRODUCT_NAME_WORDS.has(normalized)) return false;
+      return compactText.includes(normalized);
     });
+}
+
+/** Whether "ПГ"/"ПО" appears as its own word in the product name, not just as a substring. */
+function hasDoorTypeToken(name: string, token: "ПГ" | "ПО"): boolean {
+  return name
+    .replace(/[()]/g, " ")
+    .split(/\s+/)
+    .includes(token);
 }
 const ATTACHMENT_KIND_TO_MIME: Record<string, string> = {
   image: "image/jpeg",
@@ -275,6 +301,30 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
       };
     }
 
+    // A customer answering "Это размер полотна" to the leaf-vs-opening
+    // clarifying question doesn't repeat any numbers, so parseDoorGroups above
+    // finds nothing and this reply would otherwise be silently lost — leaving
+    // the group "unspecified" forever and re-asking the same question every
+    // turn. Only a standalone leaf/opening statement (no fresh sizes this
+    // turn) resolves the *existing* unresolved groups.
+    if (!parsedDoorGroups && orderSpec?.doorGroups.some((g) => g.widthKind === "unspecified")) {
+      const standaloneKind: OpeningSizeKind | undefined = LEAF_KEYWORD_PATTERN.test(enrichedText)
+        ? "leaf"
+        : OPENING_KEYWORD_PATTERN.test(enrichedText)
+          ? "opening"
+          : undefined;
+      if (standaloneKind) {
+        orderSpec = {
+          ...orderSpec,
+          doorGroups: orderSpec.doorGroups.map((g) =>
+            g.widthKind === "unspecified"
+              ? { ...g, widthKind: standaloneKind, heightKind: g.heightMm !== undefined ? standaloneKind : g.heightKind }
+              : g
+          ),
+        };
+      }
+    }
+
     if (enrichedText.trim().length > 0) {
       const searchResult = await this.search.handle(context, { text: enrichedText });
       logs.push(...searchResult.logs);
@@ -298,7 +348,16 @@ export class DirectorAgent implements Agent<DirectorInput, DirectorPayload> {
       // many offers (e.g. "античный орех") can outrank the specific model the
       // customer actually named — scan the whole result set for an explicit
       // name match rather than trusting foundProducts[0] alone.
-      const explicitMatch = foundProducts.find((p) => mentionsProductByName(p, enrichedText));
+      const nameMatches = foundProducts.filter((p) => mentionsProductByName(p, enrichedText));
+      // A model often comes in ПГ (blind) / ПО (glazed) variants that both
+      // match the same name — use "глухая"/"остеклённая" wording, when present,
+      // to pick the right one instead of whichever happens to rank first.
+      const wantsBlind = /глух/iu.test(enrichedText);
+      const wantsGlazed = /остекл|со\s*стеклом/iu.test(enrichedText);
+      const explicitMatch =
+        (wantsBlind && nameMatches.find((p) => hasDoorTypeToken(p.name, "ПГ"))) ||
+        (wantsGlazed && nameMatches.find((p) => hasDoorTypeToken(p.name, "ПО"))) ||
+        nameMatches[0];
       const isExplicitSwitch = explicitMatch && (!anchoredProduct || explicitMatch.id !== anchoredProduct.id);
 
       const primaryProduct = explicitMatch ?? anchoredProduct ?? foundProducts[0];

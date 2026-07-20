@@ -126,6 +126,14 @@ const STOPWORDS = new Set([
   "стоимость",
   "сколько",
   "цена",
+  // "Модель X" is how customers introduce a model name ("модель скай 3"), but
+  // several unrelated product lines literally start with the word "Модель"
+  // (e.g. "Модель 33.24 ДО") — without this, that generic instruction word
+  // coincidentally tied those unrelated items with the real named model in
+  // score, crowding the actual match out of the top results.
+  "модель",
+  "модели",
+  "посчитайте",
   "цену",
   "для",
 ]);
@@ -188,12 +196,31 @@ export class RfDveriYmlCatalogClient implements CatalogClient {
     const tokens = tokenize(query.text);
     if (tokens.length === 0) return [];
 
+    // Weight matches by inverse document frequency: a token that appears in
+    // nearly every offer ("двери") barely distinguishes anything, while a rare
+    // one (a specific model name, a vendor) is a strong signal. Plain match-count
+    // scoring let common words in a long, conversational query outweigh the one
+    // specific model name/vendor the customer actually typed, so a real model
+    // ("Скай-3", "Ванмарк") could rank below 20 generic-but-verbose matches and
+    // never make it into the results at all.
+    const documentFrequency = new Map<string, number>();
+    for (const token of tokens) {
+      if (documentFrequency.has(token)) continue;
+      documentFrequency.set(token, candidates.reduce((count, c) => count + (c.searchText.includes(token) ? 1 : 0), 0));
+    }
+
     const scored = candidates
-      .map((e) => ({ entry: e, score: tokens.filter((t) => e.searchText.includes(t)).length }))
+      .map((e) => ({
+        entry: e,
+        score: tokens.reduce((sum, t) => {
+          if (!e.searchText.includes(t)) return sum;
+          return sum + 1 / (documentFrequency.get(t) ?? 1);
+        }, 0),
+      }))
       .filter((s) => s.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    return scored.slice(0, 20).map((s) => s.entry.product);
+    return scored.slice(0, 30).map((s) => s.entry.product);
   }
 
   async getBySku(sku: string): Promise<Product | null> {

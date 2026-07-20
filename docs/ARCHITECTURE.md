@@ -149,6 +149,48 @@ reference table); "толщина стены 14см" three turns later (no kit k
 it) still triggered the calculation and produced the same 143,480 ₽ total
 verified earlier via the direct `/price` endpoint.
 
+A follow-up test (a different model, "Скай-3" / WanMark) surfaced one more
+gap in the same area: a customer answering the leaf-vs-opening question with
+just "Это размер полотна" — no numbers repeated — didn't match
+`parseDoorGroups` at all, so the answer was silently lost and the group
+stayed `unspecified` forever. Fixed with a second, narrower parse: when this
+turn introduced no *new* size numbers but the text contains a standalone
+"полотно"/"проём" word, that resolves every currently-`unspecified` group in
+the existing `orderSpec` instead of waiting for the customer to repeat sizes
+that were already given.
+
+## Search ranking: rare words need to outweigh common ones
+
+The same "Скай-3" test also caught a real search-quality bug. A query like
+"Посчитайте 3 двери 80 на 200 ... модель скай 3 ... фабрики ванмарк" scores
+every candidate by *how many* query tokens its text contains, with no
+weighting — so "двери" (in ~3000 offers) counted the same as "скай" (in 32
+offers), and the specific model didn't even make the top 20 results, ranking
+below dozens of unrelated products that happened to share more of the
+generic words.
+
+- `RfDveriYmlCatalogClient.search()` now weights each matching token by
+  `1/documentFrequency` (computed over the candidate set per search — cheap
+  at ~7000 offers) instead of counting matches flatly, so a rare, specific
+  token like a model name or vendor counts far more than a common one.
+- That alone wasn't enough: "модель" (how customers say "the model is X") is
+  rare enough in the catalog to score highly on its own — except several
+  unrelated product lines are literally *named* "Модель 33.24 ...", so it
+  coincidentally tied a generic instruction word with an unrelated product
+  family. Added to the search stopword list, since it's never itself a
+  distinguishing search term.
+- The result window was widened 20 → 30 for headroom, since `DirectorAgent`'s
+  explicit-name-match check (see above) only ever scans within what
+  `SearchAgent` actually returns.
+- `mentionsProductByName()`'s matching also needed two fixes surfaced by the
+  same test: it compared strings directly, so "Скай-3" (hyphenated in the
+  catalog) never matched a customer typing "скай 3" (space); and its 5-letter
+  minimum excluded legitimately short model names like "Скай" (4 letters).
+  Now compares with spaces/hyphens stripped and a 4-letter minimum. When a
+  model has both ПГ (blind) and ПО (glazed) variants that both match the same
+  name, "глухая"/"остеклённая" wording (when present) picks the right one
+  instead of whichever ranks first.
+
 ## Bulk kits with jamb extensions (добор) and multiple doors
 
 Found while pricing a real 5-door order: `PriceAgent`'s `kit` input now
