@@ -341,6 +341,62 @@ Windows-1251-encoded XML feed with ~7000 offers, no auth required. Notes:
 - `DirectorAgent`'s routing (price-intent detection, when to call each
   specialist) is a heuristic, not an LLM planner — swap in function-calling /
   tool-use once end-to-end conversations need more nuanced routing.
-- Memory, conversations, and tasks are in-memory (`InMemoryMemoryStore`,
-  `ConversationManager`) — fine for local dev, needs a DB-backed
-  implementation of the same interfaces before production traffic.
+- Task tracking (`TaskAgent`) delegates straight to AmoCRM's own tasks API —
+  there's no local task store to persist.
+
+## Persistence: SQLite via `node:sqlite`
+
+Conversations, messages, agent logs, and customer memory are stored in a
+single SQLite file (`core/persistence/Database.ts`), not in memory. This
+replaced the original `InMemoryMemoryStore`/in-memory `ConversationManager`,
+which lost all state on every process restart — a real problem during
+testing (a server crash mid-conversation meant replaying the whole message
+history by hand) and a blocker for production (any redeploy would wipe every
+open conversation).
+
+- Uses Node's **built-in** `node:sqlite` (`DatabaseSync`, stable since Node
+  22.5, still flagged experimental — hence the startup warning) rather than
+  `better-sqlite3` or a Postgres driver. That means zero native dependencies:
+  `npm install` never needs a C++ toolchain, which matters both for
+  constrained deploy targets and for someone self-hosting this on their own
+  machine (see "Local install" below).
+- `DATABASE_PATH` (default `./data/app.db`) controls the file location — set
+  it to an absolute path in production so it survives working-directory
+  changes across redeploys. WAL mode is enabled for concurrent read/write
+  safety.
+- `ConversationManager` and `SqliteMemoryStore` keep the exact same public
+  method signatures the old in-memory versions had (`create`, `get`,
+  `appendMessage`, `setFocusProduct`, `setOrderSpec`, etc.) — routes
+  (`api/routes/widget.ts`, `api/routes/amocrm.ts`) didn't need to change.
+- This is a single-file, single-process store — correct for one backend
+  instance, not for horizontally-scaled multi-instance deploys (SQLite
+  doesn't arbitrate concurrent writers across machines). If you outgrow a
+  single instance, swap `Database.ts` for a Postgres pool behind the same
+  `ConversationManager`/`MemoryStore` interfaces; nothing else in the
+  codebase needs to know.
+- Verified by killing and restarting the backend process mid-conversation
+  and confirming `GET /api/conversations/:id` still returns the full message
+  history afterward.
+
+## Running this yourself without the AmoCRM Marketplace
+
+You don't need a Marketplace listing to use this. Two ways to run it against
+your own AmoCRM account:
+
+- **Local install (fastest to test)**: run `services/backend` on your own
+  machine (or a small VPS) with a real `.env` (Anthropic key, catalog feed
+  URL), expose it via a tunnel (e.g. `ngrok http 4000`) for a public HTTPS
+  URL AmoCRM can reach, then upload the zipped `apps/widget/amocrm/` package
+  as a **private integration** in your AmoCRM account (Настройки →
+  Интеграции → Мои интеграции) — no Marketplace review needed for this. Set
+  the widget's `backend_base_url` setting to your tunnel URL.
+- **Real deploy**: same widget package, but `services/backend` runs on
+  persistent hosting (VPS/Render/Railway/etc.) with a stable domain instead
+  of a tunnel, and `DATABASE_PATH` points at a persistent disk/volume so the
+  SQLite file isn't lost on redeploy.
+
+Either way you still need: an AmoCRM OAuth integration (`AMOCRM_CLIENT_ID`/
+`AMOCRM_CLIENT_SECRET`, redirect URL `BASE_URL/api/amocrm/oauth/callback`)
+registered in your AmoCRM account, and a production `ANTHROPIC_API_KEY`.
+Marketplace submission (logo, screenshots, public listing) is a separate,
+optional step only needed if you want other AmoCRM accounts to install it.

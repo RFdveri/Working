@@ -24,7 +24,8 @@ import {
   VoiceAgent,
 } from "../agents/index.js";
 import { ConversationManager } from "./conversation/ConversationManager.js";
-import { InMemoryMemoryStore, type MemoryStore } from "./memory/MemoryStore.js";
+import { SqliteMemoryStore, type MemoryStore } from "./memory/MemoryStore.js";
+import { openDatabase } from "./persistence/Database.js";
 
 /**
  * Wires every integration and agent together. This is the single place that
@@ -41,8 +42,8 @@ export class AppContainer {
   readonly stt: SttProvider;
   readonly servicePrices: ServicePriceProvider;
 
-  readonly conversations = new ConversationManager();
-  readonly memory: MemoryStore = new InMemoryMemoryStore();
+  readonly conversations: ConversationManager;
+  readonly memory: MemoryStore;
 
   readonly crmAgent: CrmAgent;
   readonly productAgent: ProductAgent;
@@ -58,6 +59,10 @@ export class AppContainer {
   readonly directorAgent: DirectorAgent;
 
   constructor() {
+    const db = openDatabase(process.env.DATABASE_PATH ?? "./data/app.db");
+    this.conversations = new ConversationManager(db);
+    this.memory = new SqliteMemoryStore(db);
+
     this.amoCrm = createAmoCrmClient();
     this.catalog = createCatalogClient();
     this.productConfigurator = createProductConfiguratorClient();

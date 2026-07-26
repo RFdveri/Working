@@ -1,10 +1,9 @@
+import type { DatabaseSync } from "node:sqlite";
 import { createEmptyMemory, type CustomerMemory } from "@ai-door-assistant/shared";
 
 /**
  * Persists what the spec calls "ПАМЯТЬ": preferences, sizes, budget, coverings,
  * conversation history references, selected models — keyed by contact.
- * Swap the in-memory implementation for a Postgres/Redis-backed one in production;
- * the interface is the contract agents and routes depend on.
  */
 export interface MemoryStore {
   get(contactId: string): Promise<CustomerMemory>;
@@ -14,11 +13,15 @@ export interface MemoryStore {
   ): Promise<CustomerMemory>;
 }
 
-export class InMemoryMemoryStore implements MemoryStore {
-  private readonly memories = new Map<string, CustomerMemory>();
+/** SQLite-backed store — survives process restarts. See `core/persistence/Database.ts`. */
+export class SqliteMemoryStore implements MemoryStore {
+  constructor(private readonly db: DatabaseSync) {}
 
   async get(contactId: string): Promise<CustomerMemory> {
-    return this.memories.get(contactId) ?? createEmptyMemory();
+    const row = this.db
+      .prepare("SELECT data FROM customer_memory WHERE contact_id = ?")
+      .get(contactId) as { data: string } | undefined;
+    return row ? (JSON.parse(row.data) as CustomerMemory) : createEmptyMemory();
   }
 
   async update(
@@ -39,7 +42,12 @@ export class InMemoryMemoryStore implements MemoryStore {
       sizes: { ...current.sizes, ...patch.sizes },
       budget: patch.budget ?? current.budget,
     };
-    this.memories.set(contactId, merged);
+    this.db
+      .prepare(
+        `INSERT INTO customer_memory (contact_id, data) VALUES (?, ?)
+         ON CONFLICT (contact_id) DO UPDATE SET data = excluded.data`
+      )
+      .run(contactId, JSON.stringify(merged));
     return merged;
   }
 }
