@@ -1,0 +1,9 @@
+{
+  "_comment": "Placeholder price list. Fill in real installation/measurement/delivery prices and the custom-size surcharge rule before going live — the Price Agent refuses to guess values missing here.",
+  "prices": {
+    "installation": null,
+    "measurement": null,
+    "delivery": null
+  },
+  "customSizeSurchargeRule": null
+}

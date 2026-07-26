@@ -1,0 +1,21 @@
+{
+  "name": "ai-door-assistant",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI Door Assistant for AmoCRM — multi-agent sales assistant widget",
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:backend": "npm run dev -w services/backend",
+    "dev:widget": "npm run dev -w apps/widget",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

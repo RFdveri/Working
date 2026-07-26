@@ -1,0 +1,30 @@
+{
+  "widget": {
+    "name": {
+      "ru": "AI Door Assistant",
+      "en": "AI Door Assistant"
+    },
+    "description": {
+      "ru": "AI-агент по продаже дверей: консультации, поиск товаров, расчёт стоимости, анализ файлов, создание задач.",
+      "en": "AI door sales agent: consulting, product search, price calculation, file analysis, manager task creation."
+    },
+    "short_description": {
+      "ru": "AI-ассистент отдела продаж дверей",
+      "en": "AI assistant for door sales"
+    },
+    "version": "0.1.0",
+    "vendor": "rf-dveri.ru"
+  },
+  "locations": ["lcard", "ccard"],
+  "settings_template": [
+    {
+      "key": "backend_base_url",
+      "type": "text",
+      "required": true,
+      "name": {
+        "ru": "URL backend-сервиса",
+        "en": "Backend service URL"
+      }
+    }
+  ]
+}

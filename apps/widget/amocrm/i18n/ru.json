@@ -1,0 +1,11 @@
+{
+  "widget": {
+    "name": "AI Door Assistant",
+    "settings": {
+      "backend_base_url": "URL backend-сервиса"
+    },
+    "errors": {
+      "not_configured": "Укажите URL backend-сервиса в настройках виджета"
+    }
+  }
+}

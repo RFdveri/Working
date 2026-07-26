@@ -1,0 +1,49 @@
+{
+  "_comment": "Standard interior door leaf/opening sizes by room, as given by the business owner. Used only as reference/advice data (e.g. when a customer hasn't decided on a size yet) — never overrides a size the customer actually stated.",
+  "rows": [
+    {
+      "room": "Кладовая",
+      "leafWidthMm": 550,
+      "leafHeightMm": 1900,
+      "openingWidthMm": [630, 650],
+      "openingHeightMm": [1980, 1980]
+    },
+    {
+      "room": "Санузел/ванна",
+      "leafWidthMm": 600,
+      "leafHeightMm": 2000,
+      "openingWidthMm": [680, 700],
+      "openingHeightMm": [1980, 2080]
+    },
+    {
+      "room": "Кухня",
+      "leafWidthMm": 700,
+      "leafHeightMm": 2000,
+      "openingWidthMm": [780, 800],
+      "openingHeightMm": [2080, 2080]
+    },
+    {
+      "room": "Жилая комната",
+      "leafWidthMm": 800,
+      "leafHeightMm": 2000,
+      "openingWidthMm": [880, 900],
+      "openingHeightMm": [2080, 2080]
+    },
+    {
+      "room": "Гостиная (1 полотно)",
+      "leafWidthMm": 900,
+      "leafHeightMm": 2000,
+      "openingWidthMm": [980, 1000],
+      "openingHeightMm": [2080, 2080]
+    },
+    {
+      "room": "Гостиная (2 полотна, по 600 мм каждое)",
+      "leafWidthMm": 1200,
+      "leafHeightMm": 2000,
+      "openingWidthMm": [1280, 1300],
+      "openingHeightMm": [2080, 2080]
+    }
+  ],
+  "widthMarginMm": [80, 100],
+  "heightMarginMm": [70, 80]
+}
